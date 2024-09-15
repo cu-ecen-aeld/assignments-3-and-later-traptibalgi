@@ -1,9 +1,9 @@
+#!/bin/sh
+
 # Finder script
 # Author: Trapti Damodar Balgi
 # References: 1. https://ryanstutorials.net/bash-scripting-tutorial/bash-if-statements.php
 # 			  2. https://unix.stackexchange.com/questions/1125/how-can-i-get-a-count-of-files-in-a-directory-using-the-command-line
-
-#!/bin/bash
 
 # Extract the CL arguments
 filesdir=$1
@@ -31,4 +31,5 @@ instance_count=$(grep -r "$searchstr" "$filesdir" | wc -l)
 
 echo "The number of files are "$num_files" and the number of matching lines are "$instance_count""
 
-
+# Search for number of files in $filesdir
+num_files=$(find "$filesdir" -type f | wc -l)
