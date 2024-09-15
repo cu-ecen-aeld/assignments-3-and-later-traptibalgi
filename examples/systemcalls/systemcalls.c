@@ -277,10 +277,10 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     }
     else 
     {
-        /*Parent process*/
+        /*Parent process*/ 
 
         close(fd);
-        
+
         int child_status;
         pid_t ret_status;
 
