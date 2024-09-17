@@ -1,3 +1,25 @@
+/*******************************************************************************
+ * Copyright (C) 2024 by Trapti Damodar Balgi
+ *
+ * Redistribution, modification or use of this software in source or binary
+ * forms is permitted as long as the files maintain this copyright. Users are
+ * permitted to modify this and use it to learn about the field of embedded
+ * software. Trapti Damodar Balgi and the University of Colorado are not liable for
+ * any misuse of this material.
+ * ****************************************************************************/
+
+/**
+ * @file    threading.h
+ * @brief   Header file for threading implementation
+ *
+ * @author  Trapti Damodar Balgi
+ * @date    09/16/2024
+ * @references  
+ * 1. AESD Lectures and Slides
+ * 2. Linux System Programming - Chapter 7 
+ *
+ */
+
 #include <stdbool.h>
 #include <pthread.h>
 
@@ -7,20 +29,14 @@
  * It should be returned by your thread so it can be freed by
  * the joiner thread.
  */
-struct thread_data{
-    /*
-     * TODO: add other values your thread will need to manage
-     * into this structure, use this structure to communicate
-     * between the start_thread_obtaining_mutex function and
-     * your thread implementation.
-     */
-
-    /**
-     * Set to true if the thread completed with success, false
-     * if an error occurred.
-     */
+struct thread_data {
+    pthread_mutex_t *mutex_t;
+    int wait_to_obtain_ms;
+    int wait_to_release_ms;
     bool thread_complete_success;
 };
+
+typedef struct thread_data thread_data_t;
 
 
 /**
