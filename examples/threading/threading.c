@@ -26,10 +26,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <string.h>
 
 // Optional: use these functions to add debug or error prints to your application
-#define DEBUG_LOG(msg,...)
-//#define DEBUG_LOG(msg,...) printf("threading: " msg "\n" , ##__VA_ARGS__)
+#define DEBUG_LOG(msg,...) printf("threading: " msg "\n" , ##__VA_ARGS__)
 #define ERROR_LOG(msg,...) printf("threading ERROR: " msg "\n" , ##__VA_ARGS__)
 
 void* threadfunc(void* thread_param)
@@ -39,7 +39,7 @@ void* threadfunc(void* thread_param)
     /*Sleep for wait_to_obtain_ms before locking mutex*/
     if(usleep(thread_func_args->wait_to_obtain_ms * 1000) != 0)
     {
-        printf("Sleep for wait_to_obtain_ms before locking mutex failed!\n");
+        ERROR_LOG("Sleep for wait_to_obtain_ms before locking mutex failed with error %s\n", strerror(errno));
         thread_func_args->thread_complete_success = false;
         return thread_param;
     }
@@ -47,7 +47,7 @@ void* threadfunc(void* thread_param)
     /* Obtain the mutex, if return non-zero, lock failed*/
     if (pthread_mutex_lock (thread_func_args->mutex_t) != 0)
     {
-        printf("Locking mutex failed!\n");
+        ERROR_LOG("Locking mutex failed with error %s\n", strerror(errno));
         thread_func_args->thread_complete_success = false;
         return thread_param;
     }
@@ -55,7 +55,7 @@ void* threadfunc(void* thread_param)
     /*Sleep for wait_to_release_ms before locking mutex*/
     if(usleep(thread_func_args->wait_to_release_ms * 1000) != 0)
     {
-        printf("Sleep for wait_to_release_ms before locking mutex failed!\n");
+        ERROR_LOG("Sleep for wait_to_release_ms before locking mutex failed with error %s\n", strerror(errno));
         thread_func_args->thread_complete_success = false;
         return thread_param;
     }
@@ -63,7 +63,7 @@ void* threadfunc(void* thread_param)
     /*Unlock the mutex*/
     if (pthread_mutex_unlock (thread_func_args->mutex_t) != 0)
     {
-        printf("Unlocking mutex failed!\n");
+        ERROR_LOG("Unlocking mutex failed with error %s\n", strerror(errno));
         thread_func_args->thread_complete_success = false;
         return thread_param;
     }
@@ -85,7 +85,7 @@ bool start_thread_obtaining_mutex(pthread_t *thread, pthread_mutex_t *mutex, int
     thread_data_t *thread_data_s = (thread_data_t*) malloc(sizeof(thread_data_t));
     if (thread_data_s == NULL)
     {
-        printf("Malloc Failed!");
+        ERROR_LOG("Malloc failed with error %s\n", strerror(errno));
         return false;
     }
 
@@ -99,7 +99,7 @@ bool start_thread_obtaining_mutex(pthread_t *thread, pthread_mutex_t *mutex, int
     if (pthread_create(thread, NULL, threadfunc, thread_data_s) != 0)
     {
         /* If ret non-zero, create failed*/
-        printf("pthread_create Failed!");
+        ERROR_LOG("pthread_create failed with error %s\n", strerror(errno));
         return false;
     }
 
