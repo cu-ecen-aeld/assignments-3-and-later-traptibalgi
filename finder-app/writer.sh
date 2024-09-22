@@ -1,8 +1,8 @@
+#!/bin/sh
+
 # Writer script
 # Author: Trapti Damodar Balgi
 # References: 1. https://ryanstutorials.net/bash-scripting-tutorial/bash-if-statements.php
-
-#!/bin/bash
 
 # Extract the CL arguments
 writefile=$1
