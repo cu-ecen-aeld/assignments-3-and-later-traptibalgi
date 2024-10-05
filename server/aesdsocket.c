@@ -40,10 +40,11 @@
 #define ERROR (-1)
 #define BACKLOG (10)
 #define PORT_NUM (9000)
-#define MAX_BUF_SIZE (655536)
+#define BUF_SIZE (1024)
 
-int sockfd = -1, new_fd = -1;
+int sockfd, new_fd;
 struct addrinfo *res;  // will point to the results
+volatile sig_atomic_t caught_signal = 0;
 FILE *tmp_file = NULL;
 
 void cleanup() 
@@ -63,6 +64,7 @@ void cleanup()
     if (tmp_file != NULL) 
     {
         fclose(tmp_file);
+        tmp_file = NULL;
         remove("/var/tmp/aesdsocketdata");
     }
 
@@ -139,18 +141,7 @@ bool create_daemon ()
 
 static void signal_handler (int signal_number)
 {
-    if (signal_number == SIGINT)
-    {
-        syslog(LOG_ERR, "Caught SIGINT, exiting");
-        cleanup();
-        exit(0);
-    }
-    else if (signal_number == SIGTERM)
-    {
-        syslog(LOG_ERR, "Caught SIGTERM, exiting");
-        cleanup();
-        exit(0);
-    }
+    caught_signal = signal_number;
 }
 
 int main ( int argc, char **argv )
@@ -205,9 +196,28 @@ int main ( int argc, char **argv )
         exit(1);
     }
 
+    /* Run as a daemon if specified */
+    if (is_daemon)
+    {
+        bool daemon_status = create_daemon();
+        if (!daemon_status)
+        {
+            cleanup();
+            exit(1);
+        }
+    }
+
     if (listen(sockfd, BACKLOG) == -1)
     {
         syslog(LOG_ERR, "Listen failed");
+        cleanup();
+        exit(1);
+    }
+
+    tmp_file = fopen("/var/tmp/aesdsocketdata", "w+");
+    if (tmp_file == NULL) 
+    {
+        syslog(LOG_ERR, "Failed to open /var/tmp/aesdsocketdata");
         cleanup();
         exit(1);
     }
@@ -227,61 +237,94 @@ int main ( int argc, char **argv )
         syslog(LOG_ERR, "Sigaction for SIGINT failed");
     }
 
-    /* Run as a daemon if specified */
-    if (is_daemon)
-    {
-        bool daemon_status = create_daemon();
-        if (!daemon_status)
-        {
-            cleanup();
-            exit(1);
-        }
-    }
-
-    tmp_file = fopen("/var/tmp/aesdsocketdata", "w+");
-    if (tmp_file == NULL) 
-    {
-        syslog(LOG_ERR, "Failed to open /var/tmp/aesdsocketdata");
-        cleanup();
-        exit(1);
-    }
-
-    /* Now accept an incoming connection in a loop */
-    while (1)
+    /* Now accept an incoming connection in a loop while signal not caught*/
+    while (!caught_signal)
     {
         addr_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
         if (new_fd == -1)
         {
-            syslog(LOG_ERR, "Accept failed");
-            continue;
+            syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
+            cleanup();
+            exit(1);
         }
     
         char client_ip[INET_ADDRSTRLEN];        /* Size for IPv4 addresses */
         inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
         syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
 
-        char buf[MAX_BUF_SIZE];
-        /* Receive data */
-        int length = recv(new_fd, buf, sizeof(buf) - 1, 0);
-        if (length == -1) 
+        /* Dynamically allocate an initial buffer size, later resize as needed*/
+        size_t receive_buf_size = BUF_SIZE;
+        char *buf = (char *)malloc(receive_buf_size);
+        memset(buf, 0, BUF_SIZE);
+        if (buf == NULL)
         {
-            syslog(LOG_ERR, "Receive failed");
+            syslog(LOG_ERR, "Memory allocation failed for receiving buffer");
             close(new_fd);
             continue;
         }
-        buf[length] = '\0';
+
+        int length;
+        size_t total_received = 0;
+
+        /* Loop to receive data until a newline is found */
+        do
+        {
+            static int count = 0;
+    
+            /* Resize buffer dynamically if needed from the second count*/
+            if ((total_received + 1 >= receive_buf_size) && (count != 0))
+            {
+                /* Double the size */
+                receive_buf_size *= 2;
+                char *new_buf = (char *)realloc(buf, receive_buf_size);
+                if (new_buf == NULL)
+                {
+                    syslog(LOG_ERR, "Realloc failed for receiving buffer");
+                    free(buf);
+                    close(new_fd);
+                    continue;
+                }
+                buf = new_buf;
+            }
+
+            /* Receive data. ssize_t recv(int sockfd, void buf[.len], size_t len, int flags);*/
+            length = recv(new_fd, buf + total_received, receive_buf_size - total_received - 1, 0);
+            if (length == -1)
+            {
+                syslog(LOG_ERR, "Receive failed");
+                free(buf);
+                close(new_fd);
+                continue;
+            }
+
+            total_received += length;
+            count++;
+
+        } while (buf[total_received -1] != '\n' && length > 0);
+
+        /* Null terminate the string */
+        buf[total_received] = '\0';
 
         printf("Received %s\n", buf);
 
         fprintf(tmp_file, "%s", buf);
         fflush(tmp_file);
+        free(buf);
 
         /* Send back to client */
-        rewind(tmp_file);
+        fseek(tmp_file, 0, SEEK_SET);
 
-        char send_buf[MAX_BUF_SIZE];
-        while (fgets(send_buf, sizeof(send_buf), tmp_file) != NULL) 
+        size_t send_buf_size = total_received + 1;
+        char *send_buf = (char *)malloc(send_buf_size);
+        if (send_buf == NULL)
+        {
+            syslog(LOG_ERR, "Memory allocation failed for sending buffer");
+            close(new_fd);
+            continue;
+        }
+
+        while (fgets(send_buf, send_buf_size, tmp_file) != NULL) 
         {
             if (send(new_fd, send_buf, strlen(send_buf), 0) == -1) 
             {
@@ -291,13 +334,11 @@ int main ( int argc, char **argv )
         }
 
         printf("Sent %s\n", send_buf);
+        free(send_buf);
 
-        if (new_fd != -1) 
-        {
-            close(new_fd);
-        }
+        close(new_fd);
     }
 
     cleanup();
-    return 0;
+    closelog();
 }
