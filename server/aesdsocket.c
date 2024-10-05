@@ -42,8 +42,37 @@
 #define PORT_NUM (9000)
 #define MAX_BUF_SIZE (655536)
 
-int sockfd, new_fd;
+int sockfd = -1, new_fd = -1;
 struct addrinfo *res;  // will point to the results
+FILE *tmp_file = NULL;
+
+void cleanup() 
+{
+    if (new_fd != -1) 
+    {
+        shutdown(new_fd, SHUT_RDWR);
+        close(new_fd);
+    }
+
+    if (sockfd != -1) 
+    {
+        shutdown(sockfd, SHUT_RDWR);
+        close(sockfd);
+    }
+
+    if (tmp_file != NULL) 
+    {
+        fclose(tmp_file);
+        remove("/var/tmp/aesdsocketdata");
+    }
+
+    if (res != NULL) 
+    {
+        freeaddrinfo(res);
+    }
+
+    closelog();
+}
 
 bool create_daemon ()
 {
@@ -113,43 +142,13 @@ static void signal_handler (int signal_number)
     if (signal_number == SIGINT)
     {
         syslog(LOG_ERR, "Caught SIGINT, exiting");
-
-        /* Shutdown the connections */
-        if (new_fd != -1) {
-            shutdown(new_fd, SHUT_RDWR);
-            close(new_fd);
-        }
-
-        if (sockfd != -1) {
-            shutdown(sockfd, SHUT_RDWR);
-            close(sockfd);
-        }
-
-        remove("/var/tmp/aesdsocketdata");
-        /* Free the linked-list */ 
-        freeaddrinfo(res);
-        closelog();
+        cleanup();
         exit(0);
     }
     else if (signal_number == SIGTERM)
     {
         syslog(LOG_ERR, "Caught SIGTERM, exiting");
-
-        /* Shutdown the connections */
-        if (new_fd != -1) {
-            shutdown(new_fd, SHUT_RDWR);
-            close(new_fd);
-        }
-
-        if (sockfd != -1) {
-            shutdown(sockfd, SHUT_RDWR);
-            close(sockfd);
-        }
-
-        remove("/var/tmp/aesdsocketdata");
-        /* Free the linked-list */ 
-        freeaddrinfo(res);
-        closelog();
+        cleanup();
         exit(0);
     }
 }
@@ -178,7 +177,7 @@ int main ( int argc, char **argv )
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0) 
     {
         syslog(LOG_ERR, "getaddrinfo failed");
-        closelog();
+        cleanup();
         exit(1);
     }
 
@@ -186,8 +185,7 @@ int main ( int argc, char **argv )
     if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
     {
         syslog(LOG_ERR, "Failed to make a socket");
-        freeaddrinfo(res);     /* Free the linked-list */
-        closelog();
+        cleanup();
         exit(1);
     }
     
@@ -195,9 +193,7 @@ int main ( int argc, char **argv )
     if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != 0)
     {
         syslog(LOG_ERR, "Socket reuse failed");
-        freeaddrinfo(res);     /* Free the linked-list */
-        close(sockfd);
-        closelog();
+        cleanup();
         exit(1);
     }
 
@@ -205,18 +201,14 @@ int main ( int argc, char **argv )
     if (bind(sockfd, res->ai_addr, res->ai_addrlen) == -1) 
     {
         syslog(LOG_ERR, "Bind failed");
-        freeaddrinfo(res);     /* Free the linked-list */
-        close(sockfd);
-        closelog();
+        cleanup();
         exit(1);
     }
 
     if (listen(sockfd, BACKLOG) == -1)
     {
         syslog(LOG_ERR, "Listen failed");
-        freeaddrinfo(res);     /* Free the linked-list */
-        close(sockfd);
-        closelog();
+        cleanup();
         exit(1);
     }
 
@@ -241,20 +233,16 @@ int main ( int argc, char **argv )
         bool daemon_status = create_daemon();
         if (!daemon_status)
         {
-            freeaddrinfo(res);     /* Free the linked-list */
-            close(sockfd);
-            closelog();
+            cleanup();
             exit(1);
         }
     }
 
-    FILE *file = fopen("/var/tmp/aesdsocketdata", "w+");
-    if (file == NULL) 
+    tmp_file = fopen("/var/tmp/aesdsocketdata", "w+");
+    if (tmp_file == NULL) 
     {
         syslog(LOG_ERR, "Failed to open /var/tmp/aesdsocketdata");
-        freeaddrinfo(res);
-        close(sockfd);
-        closelog();
+        cleanup();
         exit(1);
     }
 
@@ -266,10 +254,7 @@ int main ( int argc, char **argv )
         if (new_fd == -1)
         {
             syslog(LOG_ERR, "Accept failed");
-            freeaddrinfo(res);     /* Free the linked-list */
-            close(sockfd);
-            closelog();
-            exit(1);
+            continue;
         }
     
         char client_ip[INET_ADDRSTRLEN];        /* Size for IPv4 addresses */
@@ -289,14 +274,14 @@ int main ( int argc, char **argv )
 
         printf("Received %s\n", buf);
 
-        fprintf(file, "%s", buf);
-        fflush(file);
+        fprintf(tmp_file, "%s", buf);
+        fflush(tmp_file);
 
         /* Send back to client */
-        rewind(file);
+        rewind(tmp_file);
 
         char send_buf[MAX_BUF_SIZE];
-        while (fgets(send_buf, sizeof(send_buf), file) != NULL) 
+        while (fgets(send_buf, sizeof(send_buf), tmp_file) != NULL) 
         {
             if (send(new_fd, send_buf, strlen(send_buf), 0) == -1) 
             {
@@ -313,7 +298,6 @@ int main ( int argc, char **argv )
         }
     }
 
-    freeaddrinfo(res);     /* Free the linked-list */
-    close(sockfd);
-    closelog();
+    cleanup();
+    return 0;
 }
