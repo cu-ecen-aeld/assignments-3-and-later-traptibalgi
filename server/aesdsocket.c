@@ -265,7 +265,8 @@ int main ( int argc, char **argv )
         }
 
         int length;
-        size_t total_received = 0;
+        size_t total_received = 0, valid_size = 0;
+        char *end_packet = NULL;
 
         /* Loop to receive data until a newline is found */
         do
@@ -285,6 +286,7 @@ int main ( int argc, char **argv )
                     close(new_fd);
                     continue;
                 }
+                memset(new_buf + total_received, 0, receive_buf_size - total_received);
                 buf = new_buf;
             }
 
@@ -299,23 +301,32 @@ int main ( int argc, char **argv )
             }
 
             total_received += length;
+            end_packet = strchr(buf, '\n');
             count++;
 
-        } while (buf[total_received -1] != '\n' && length > 0);
+        } while ((end_packet == NULL) && (length > 0));
 
-        /* Null terminate the string */
-        buf[total_received] = '\0';
-
-        printf("Received %s\n", buf);
-
-        fprintf(tmp_file, "%s", buf);
-        fflush(tmp_file);
+    /* Check if we found a newline */
+        if (end_packet != NULL)
+        {
+            /* Append to file only until \n */
+            valid_size = end_packet - buf + 1; 
+            /* Null terminate the string */
+            buf[valid_size] = '\0';
+            fwrite(buf, sizeof(char), valid_size, tmp_file);
+            fflush(tmp_file);
+        }
+        else
+        {
+            syslog(LOG_ERR, "Received without newline\n");
+        }
+            
         free(buf);
 
         /* Send back to client */
         fseek(tmp_file, 0, SEEK_SET);
 
-        size_t send_buf_size = total_received + 1;
+        size_t send_buf_size = valid_size;
         char *send_buf = (char *)malloc(send_buf_size);
         if (send_buf == NULL)
         {
@@ -333,9 +344,7 @@ int main ( int argc, char **argv )
             }
         }
 
-        printf("Sent %s\n", send_buf);
         free(send_buf);
-
         close(new_fd);
     }
 
