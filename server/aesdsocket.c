@@ -46,6 +46,7 @@ int sockfd, new_fd;
 struct addrinfo *res;  // will point to the results
 volatile sig_atomic_t caught_signal = 0;
 FILE *tmp_file = NULL;
+char client_ip[INET_ADDRSTRLEN];        /* Size for IPv4 addresses */
 
 void cleanup() 
 {
@@ -53,6 +54,7 @@ void cleanup()
     {
         shutdown(new_fd, SHUT_RDWR);
         close(new_fd);
+        syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
     }
 
     if (sockfd != -1) 
@@ -249,7 +251,6 @@ int main ( int argc, char **argv )
             exit(1);
         }
     
-        char client_ip[INET_ADDRSTRLEN];        /* Size for IPv4 addresses */
         inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
         syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
 
@@ -261,6 +262,7 @@ int main ( int argc, char **argv )
         {
             syslog(LOG_ERR, "Memory allocation failed for receiving buffer");
             close(new_fd);
+            syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
             continue;
         }
 
@@ -284,6 +286,7 @@ int main ( int argc, char **argv )
                     syslog(LOG_ERR, "Realloc failed for receiving buffer");
                     free(buf);
                     close(new_fd);
+                    syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
                     continue;
                 }
                 memset(new_buf + total_received, 0, receive_buf_size - total_received);
@@ -297,6 +300,7 @@ int main ( int argc, char **argv )
                 syslog(LOG_ERR, "Receive failed");
                 free(buf);
                 close(new_fd);
+                syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
                 continue;
             }
 
@@ -332,6 +336,7 @@ int main ( int argc, char **argv )
         {
             syslog(LOG_ERR, "Memory allocation failed for sending buffer");
             close(new_fd);
+            syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
             continue;
         }
 
@@ -346,6 +351,7 @@ int main ( int argc, char **argv )
 
         free(send_buf);
         close(new_fd);
+        syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
     }
 
     cleanup();
