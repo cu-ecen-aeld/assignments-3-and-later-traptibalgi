@@ -290,6 +290,7 @@ int main ( int argc, char **argv )
         printf("Received %s\n", buf);
 
         fprintf(file, "%s", buf);
+        fflush(file);
 
         /* Send back to client */
         rewind(file);
