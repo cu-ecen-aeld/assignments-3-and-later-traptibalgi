@@ -1,5 +1,9 @@
 #!/bin/sh
 
+# Startup script for aesdsocket.
+# Author: Trapti Damodar Balgi
+# References: ECEN 5713 slides - Week_4_-_Time_and_Sockets
+
 case "$1" in
     start)
         echo "Starting aesdsocket"
