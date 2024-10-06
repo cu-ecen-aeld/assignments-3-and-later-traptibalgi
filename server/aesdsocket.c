@@ -247,8 +247,7 @@ int main ( int argc, char **argv )
         if (new_fd == -1)
         {
             syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
-            cleanup();
-            exit(1);
+            continue;
         }
     
         inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
