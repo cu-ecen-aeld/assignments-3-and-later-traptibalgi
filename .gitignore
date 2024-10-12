@@ -6,6 +6,12 @@ crosstool-ng
 aesd-build
 .vscode/
 test.sh.log
+<<<<<<< HEAD
 assignment-autotest/
 aesdsocket
 *.log
+=======
+aesdsocket
+server/aesdsocket
+server/valgrind-out.txt
+assignments-base/assignment6
