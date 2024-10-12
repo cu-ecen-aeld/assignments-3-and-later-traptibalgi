@@ -308,47 +308,50 @@ int main ( int argc, char **argv )
             count++;
 
         } while ((end_packet == NULL) && (length > 0));
-
-    /* Check if we found a newline */
+        
+        /* Check if we found a newline */
         if (end_packet != NULL)
         {
             /* Append to file only until \n */
             valid_size = end_packet - buf + 1; 
             /* Null terminate the string */
             buf[valid_size] = '\0';
-            fwrite(buf, sizeof(char), valid_size, tmp_file);
+
+            size_t written_bytes = fwrite(buf, sizeof(char), valid_size, tmp_file);
+            if(written_bytes < valid_size)
+            {
+                syslog(LOG_ERR, "Write to temp file failed");
+                free(buf);
+                close(new_fd);
+                syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
+                continue;
+            }
             fflush(tmp_file);
         }
         else
         {
             syslog(LOG_ERR, "Received without newline\n");
         }
-            
-        free(buf);
 
         /* Send back to client */
         fseek(tmp_file, 0, SEEK_SET);
 
-        size_t send_buf_size = valid_size;
-        char *send_buf = (char *)malloc(send_buf_size);
-        if (send_buf == NULL)
+        size_t read_bytes = 0;
+        do
         {
-            syslog(LOG_ERR, "Memory allocation failed for sending buffer");
-            close(new_fd);
-            syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
-            continue;
-        }
-
-        while (fgets(send_buf, send_buf_size, tmp_file) != NULL) 
-        {
-            if (send(new_fd, send_buf, strlen(send_buf), 0) == -1) 
+            /*Clear the buffer*/
+            memset(buf, 0, receive_buf_size);
+            /* Read full contents of the file and send*/
+            read_bytes = fread(buf, sizeof(char), receive_buf_size - 1, tmp_file);
+            fflush(tmp_file);
+            if (send(new_fd, buf, read_bytes, 0) == -1) 
             {
                 syslog(LOG_ERR, "Send to client failed");
                 break;
             }
-        }
+        } while (read_bytes > 0);
 
-        free(send_buf);
+        free(buf);
         close(new_fd);
         syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
     }
