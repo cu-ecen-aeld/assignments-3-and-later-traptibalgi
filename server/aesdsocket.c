@@ -212,15 +212,17 @@ void *threadfn_timestamp(void *time_thread_params_struct)
         }
 
         /* Lock mutex before writing to tmp file and set file position*/
+        int write_bytes = 0;
         pthread_mutex_lock(time_params->tmp_file_write_mutex);
         fseek(time_params->tmp_file_time_thread, 0, SEEK_END);
-        if ((fwrite(outstr, sizeof(char), strlen(outstr), time_params->tmp_file_time_thread)) < 0)
+        write_bytes = fwrite(outstr, sizeof(char), strlen(outstr), time_params->tmp_file_time_thread);
+        fflush(time_params->tmp_file_time_thread);
+        pthread_mutex_unlock(time_params->tmp_file_write_mutex);
+        if (write_bytes < 0)
         {
             syslog(LOG_ERR, "Timestamp write failed");
             continue;
         }
-        fflush(time_params->tmp_file_time_thread);
-        pthread_mutex_unlock(time_params->tmp_file_write_mutex);
     }
 
     return NULL;
@@ -523,7 +525,7 @@ int main ( int argc, char **argv )
 	        {
                 if(pthread_join(iterator->thread_id, NULL) != 0)
 		        {
-                    syslog(LOG_ERR, "Thread join failed fir %ld", iterator->thread_id);
+                    syslog(LOG_ERR, "Thread join failed for %ld", iterator->thread_id);
                 }
                 syslog(LOG_INFO, "Thread joined %ld", iterator->thread_id);
 
@@ -547,19 +549,16 @@ int main ( int argc, char **argv )
     server_thread_params_t *tmp = NULL;
     SLIST_FOREACH_SAFE(iterator, &head, link, tmp) 
     {
-        if (iterator->thread_complete == true) 
+        if(pthread_join(iterator->thread_id, NULL) != 0)
         {
-            if(pthread_join(iterator->thread_id, NULL) != 0)
-            {
-                syslog(LOG_ERR, "Thread join failed fir %ld", iterator->thread_id);
-            }
-            syslog(LOG_INFO, "Thread joined %ld", iterator->thread_id);
-
-            /* Remove node from the list and free the memory */
-            SLIST_REMOVE(&head, iterator, server_thread_params, link);
-            free(iterator);
-            iterator = NULL;
+            syslog(LOG_ERR, "Thread join failed for %ld", iterator->thread_id);
         }
+        syslog(LOG_INFO, "Thread joined %ld", iterator->thread_id);
+
+        /* Remove node from the list and free the memory */
+        SLIST_REMOVE(&head, iterator, server_thread_params, link);
+        free(iterator);
+        iterator = NULL;
     }
     cleanup();
     closelog();

@@ -29,9 +29,42 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    /**
-    * TODO: implement per description
-    */
+    /* Check validity of inputs */
+    if ((buffer == NULL) || (entry_offset_byte_rtn == NULL))
+    {
+        return NULL;
+    }
+
+    size_t total_size = 0;
+    uint8_t index = buffer->out_offs;
+    uint8_t entries_checked = 0;
+
+    /* Iterate over the buffer*/
+    while (entries_checked < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) 
+    {
+        struct aesd_buffer_entry *entry = &buffer->entry[index];
+        
+        if (entry->buffptr == NULL || entry->size == 0) 
+        {
+            break;
+        }
+
+        if (char_offset < total_size + entry->size) 
+        {
+            *entry_offset_byte_rtn = char_offset - total_size;
+            return entry;
+        }
+
+        total_size += entry->size;
+        index = (index + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        entries_checked++;
+
+        if (index == buffer->in_offs && !buffer->full) 
+        {
+            break;
+        }
+    }
+
     return NULL;
 }
 
@@ -44,9 +77,36 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    /**
-    * TODO: implement per description
-    */
+    /* Check validity of inputs */
+    if ((buffer == NULL) || (add_entry == NULL))
+    {
+        return;
+    }
+
+    /* If buffer full, discard oldest read element and replace. If not, use the write index*/
+
+    if(buffer->full)
+    {
+        /* Wrap around for CB */
+        buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+    
+    buffer->entry[buffer->in_offs] = *add_entry;
+    
+    /* Wrap around for CB */
+    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
+    /* Check if buffer full */
+    if (buffer->in_offs == buffer->out_offs) 
+    {
+        buffer->full = true;
+    } 
+    else 
+    {
+        buffer->full = false;
+    }
+
+    return;
 }
 
 /**
