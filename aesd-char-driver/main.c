@@ -34,7 +34,7 @@ int aesd_open(struct inode *inode, struct file *filp)
      */
 
     /* Device information*/
-    filp->private_data = container_of(inode->i_cdev, struct scull_dev, cdev);
+    filp->private_data = container_of(inode->i_cdev, struct aesd_dev, cdev);
 
     return 0;
 }
@@ -129,6 +129,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     ssize_t bytes_not_copied = 0;
     struct aesd_dev *device = NULL;
     char *tmp_buffer = NULL;
+    size_t copied_size = 0;
+    bool is_newline = false;
 
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
 
@@ -172,9 +174,9 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         goto write_free_buffer;
     }
 
-    size_t copied_size = count - bytes_not_copied;
+    copied_size = count - bytes_not_copied;
     /* Check for newline */
-    bool is_newline = (copied_size > 0 && tmp_buffer[copied_size - 1] == '\n');
+    is_newline = (copied_size > 0 && tmp_buffer[copied_size - 1] == '\n');
 
     /* If newline, add to the circular buffer*/
     if (is_newline)
@@ -293,6 +295,9 @@ int aesd_init_module(void)
 
 void aesd_cleanup_module(void)
 {
+    uint8_t index = 0;
+    struct aesd_buffer_entry *entryptr = NULL;
+
     dev_t devno = MKDEV(aesd_major, aesd_minor);
 
     cdev_del(&aesd_device.cdev);
@@ -301,15 +306,12 @@ void aesd_cleanup_module(void)
      * TODO: cleanup AESD specific poritions here as necessary
      */
 
-    uint8_t index = 0;
-    struct aesd_buffer_entry *entryptr = NULL;
-
     AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &aesd_device.buffer, index)
     {
-        if(entry->buffptr != NULL)
+        if(entryptr->buffptr != NULL)
 		{
-			kfree(entry->buffptr);
-			entry->buffptr = NULL;
+			kfree(entryptr->buffptr);
+			entryptr->buffptr = NULL;
 		}
     }
 
