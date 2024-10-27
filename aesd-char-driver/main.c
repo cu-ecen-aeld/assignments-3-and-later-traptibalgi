@@ -34,9 +34,7 @@ int aesd_open(struct inode *inode, struct file *filp)
      */
 
     /* Device information*/
-    struct scull_dev *dev;
-    dev = container_of(inode->i_cdev, struct scull_dev, cdev);
-    filp->private_data = dev;
+    filp->private_data = container_of(inode->i_cdev, struct scull_dev, cdev);
 
     return 0;
 }

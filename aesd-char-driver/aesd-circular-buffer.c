@@ -29,15 +29,15 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
+    size_t total_size = 0;
+    uint8_t index = buffer->out_offs;
+    uint8_t entries_checked = 0;
+
     /* Check validity of inputs */
     if ((buffer == NULL) || (entry_offset_byte_rtn == NULL))
     {
         return NULL;
     }
-
-    size_t total_size = 0;
-    uint8_t index = buffer->out_offs;
-    uint8_t entries_checked = 0;
 
     /* Iterate over the buffer*/
     while (entries_checked < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) 
@@ -77,19 +77,19 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 const char* aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
+    /* If we need to free old memory*/
+    const char *old_buffer = NULL;
+
     /* Check validity of inputs */
     if ((buffer == NULL) || (add_entry == NULL))
     {
-        return;
+        return NULL;
     }
-
-    /* If we need to free old memory*/
-    const char *old_buffer = NULL;
 
     /* If buffer full, we will need to free the oldest read */
     if(buffer->full)
     {
-        old_buffer = buffer->out_offs;
+        old_buffer = buffer->entry[buffer->out_offs].buffptr;
         /* Wrap around for CB */
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
