@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
+#include <linux/string.h>
 #include "aesdchar.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
@@ -135,7 +136,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
 
     /* Input validity check */
-    if ((buf == NULL) || (filp == NULL))
+    if ((buf == NULL) || (filp == NULL) || (fpos == NULL))
     {
         PDEBUG("aesd_write: Invalid inputs");
         retval = -EINVAL;
@@ -313,6 +314,11 @@ void aesd_cleanup_module(void)
 			kfree(entryptr->buffptr);
 			entryptr->buffptr = NULL;
 		}
+    }
+
+    if (aesd_device.entry.buffptr) 
+    {
+        kfree(aesd_device.entry.buffptr);
     }
 
     mutex_destroy(&aesd_device.buffer_mutex);
