@@ -179,25 +179,27 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     /* Check for newline */
     is_newline = (copied_size > 0 && tmp_buffer[copied_size - 1] == '\n');
 
+    /* Add to device->entry.buffptr. If newline, we will add it to the CB next. 
+        If not, accumulate for next write */
+
+    device->entry.buffptr = krealloc(device->entry.buffptr, device->entry.size + copied_size, GFP_KERNEL);
+    if (device->entry.buffptr == NULL)
+    {
+        PDEBUG("aesd_write: krealloc failed for entry buffer");
+        retval = -ENOMEM;
+        goto write_free_buffer;
+    }
+
+    /* Append data to the current entry */
+    for (size_t i = 0; i < copied_size; i++) 
+    {
+        device->entry.buffptr[device->entry.size + i] = tmp_buffer[i];
+    }
+    device->entry.size += copied_size;
+
     /* If newline, add to the circular buffer*/
     if (is_newline)
     {
-        /* Resize the CB */
-        device->entry.buffptr = krealloc(device->entry.buffptr, device->entry.size + copied_size, GFP_KERNEL);
-        if (device->entry.buffptr == NULL)
-        {
-            PDEBUG("aesd_write: krealloc failed for entry buffer");
-            retval = -ENOMEM;
-            goto write_free_buffer;
-        }
-
-        /* Copy data to buffer */
-        for (size_t i = 0; i < copied_size; i++) 
-        {
-            device->entry.buffptr[device->entry.size + i] = tmp_buffer[i];
-        }
-        device->entry.size += copied_size;
-
         /* Add to circular buffer and free the old buffer if needed */
         const char *old_buffer = aesd_circular_buffer_add_entry(&device->buffer, &device->entry);
         if (old_buffer != NULL)
@@ -209,24 +211,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         /* Reset for next write */
         device->entry.buffptr = NULL;
         device->entry.size = 0;
-    }
-    else
-    {
-        /* If doesn't end with a newline, accumulate for next write */
-        device->entry.buffptr = krealloc(device->entry.buffptr, device->entry.size + copied_size, GFP_KERNEL);
-        if (device->entry.buffptr == NULL)
-        {
-            PDEBUG("aesd_write: krealloc failed for entry buffer");
-            retval = -ENOMEM;
-            goto write_free_buffer;
-        }
-
-        /* Append data to the current entry */
-        for (size_t i = 0; i < copied_size; i++) 
-        {
-            device->entry.buffptr[device->entry.size + i] = tmp_buffer[i];
-        }
-        device->entry.size += copied_size;
     }
 
     retval = copied_size; 

@@ -101,8 +101,6 @@ void cleanup()
     {
         freeaddrinfo(res);
     }
-
-    closelog();
 }
 
 bool create_daemon ()
@@ -115,7 +113,7 @@ bool create_daemon ()
     if (pid < 0)
     {
         syslog(LOG_ERR, "Fork failed");
-        return daemon_status;
+        goto daemon_exit;
     }
 
     if (pid > 0)
@@ -128,7 +126,7 @@ bool create_daemon ()
     if (setsid() == -1)
     {
         syslog(LOG_ERR, "Failed to create a new session");
-        return daemon_status;
+        goto daemon_exit;
     }
 
     /* Change the working directory and redirect std file descriptors*/ 
@@ -140,7 +138,7 @@ bool create_daemon ()
     if ((file = open("/dev/null", O_RDWR)) == ERROR)
     {
         syslog(LOG_ERR, "Failed to open /dev/null");
-        return daemon_status;
+        goto daemon_exit;
     }
 
     if ((ret_stdin = dup2(file, STDIN_FILENO)) == ERROR) 
@@ -163,7 +161,10 @@ bool create_daemon ()
     {
         daemon_status = true;
     }
+
     close(file);
+
+daemon_exit:
     return daemon_status;
 }
 
@@ -179,7 +180,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
     if (time_params == NULL)
     {
         syslog(LOG_ERR, "Time thread struct is NULL");
-        return NULL;
+        goto threadfn_timestamp_exit;
     }
 
     struct timespec wall_time;
@@ -195,7 +196,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
         if (tmp == NULL) 
         {
             syslog(LOG_ERR, "Localtime");
-            return NULL;
+            goto threadfn_timestamp_exit;
         }
 
         if (clock_gettime(CLOCK_MONOTONIC, &wall_time) != 0)
@@ -219,7 +220,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
         if (file_write == NULL)
         {
             syslog(LOG_ERR, "Failed to open write file");
-            return NULL;
+            goto threadfn_timestamp_exit;
         }
 
         /* Lock mutex before writing to tmp file and set file position*/
@@ -241,6 +242,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
             file_write = NULL;
         }
     }
+threadfn_timestamp_exit:
     return NULL;
 }
 #endif
@@ -289,7 +291,7 @@ int process_data(server_thread_params_t *server_params, char *buf, size_t receiv
     if (end_packet == NULL)
     {
         syslog(LOG_ERR, "Received without newline");
-        return -1;
+        goto process_data_exit_on_fail;
     }
 
     size_t valid_size = end_packet - buf + 1;
@@ -299,7 +301,7 @@ int process_data(server_thread_params_t *server_params, char *buf, size_t receiv
     if (file_write == NULL)
     {
         syslog(LOG_ERR, "Failed to open write file");
-        return -1;
+        goto process_data_exit_on_fail;
     }
 
     pthread_mutex_lock(server_params->tmp_file_write_mutex);
@@ -316,7 +318,7 @@ int process_data(server_thread_params_t *server_params, char *buf, size_t receiv
             fclose(file_write);
             file_write = NULL;
         }
-        return -1;
+        goto process_data_exit_on_fail;
     }
 
     if (file_write != NULL) 
@@ -324,7 +326,11 @@ int process_data(server_thread_params_t *server_params, char *buf, size_t receiv
         fclose(file_write);
         file_write = NULL;
     }
+
     return 0;
+
+process_data_exit_on_fail:
+    return -1;
 }
 
 int send_response(server_thread_params_t *server_params, char *buf, size_t receive_buf_size)
@@ -336,7 +342,7 @@ int send_response(server_thread_params_t *server_params, char *buf, size_t recei
     if (file_write == NULL)
     {
         syslog(LOG_ERR, "Failed to open write file");
-        return -1;
+        goto send_response_exit_on_fail;
     }
 
     pthread_mutex_lock(server_params->tmp_file_write_mutex);
@@ -354,7 +360,7 @@ int send_response(server_thread_params_t *server_params, char *buf, size_t recei
                 fclose(file_write);
                 file_write = NULL;
             }
-            return -1;
+            goto send_response_exit_on_fail;
         }
     }
     pthread_mutex_unlock(server_params->tmp_file_write_mutex);
@@ -364,6 +370,9 @@ int send_response(server_thread_params_t *server_params, char *buf, size_t recei
         file_write = NULL;
     }
     return 0;
+
+send_response_exit_on_fail:
+    return -1;
 }
 
 void *threadfn_server(void *server_thread_params_struct)
@@ -371,7 +380,6 @@ void *threadfn_server(void *server_thread_params_struct)
     syslog(LOG_DEBUG, "in thread");
     server_thread_params_t *server_params = (server_thread_params_t*)server_thread_params_struct;
     char *buf = NULL;
-    int result = 0;
 
     if (server_params == NULL)
     {
@@ -386,18 +394,27 @@ void *threadfn_server(void *server_thread_params_struct)
         if (buf == NULL)
         {
             syslog(LOG_ERR, "Memory allocation failed for receiving buffer");
-            result = -1;
             break;
         }
         memset(buf, 0, receive_buf_size);
 
-        result = receive_data(server_params, &buf, &receive_buf_size);
-        if (result != 0) break;
+        if(receive_data(server_params, &buf, &receive_buf_size) != 0)
+        {
+            syslog(LOG_ERR, "receive_data failed");
+            break;
+        }
 
-        result = process_data(server_params, buf, receive_buf_size);
-        if (result != 0) break;
+        if(process_data(server_params, buf, receive_buf_size) != 0)
+        {
+            syslog(LOG_ERR, "process_data failed");
+            break;
+        }
 
-        result = send_response(server_params, buf, receive_buf_size);
+        if(send_response(server_params, buf, receive_buf_size) != 0)
+        {
+            syslog(LOG_ERR, "send_response failed");
+            break;
+        }
 
     } while (0);
 
@@ -405,7 +422,7 @@ void *threadfn_server(void *server_thread_params_struct)
     close(server_params->client_fd);
     syslog(LOG_DEBUG, "Closed connection from %s", server_params->client_ip);
     server_params->thread_complete = true;
-    return (void*)(intptr_t)result;
+    return NULL;
 }
 
 int main ( int argc, char **argv )
@@ -432,24 +449,21 @@ int main ( int argc, char **argv )
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0) 
     {
         syslog(LOG_ERR, "getaddrinfo failed");
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
 
     /* Create a socket */
     if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
     {
         syslog(LOG_ERR, "Failed to make a socket");
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
     
     /* Allow reuse of socket */
     if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != 0)
     {
         syslog(LOG_ERR, "Socket reuse failed");
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
 
     /* Bind it to the port we passed in to getaddrinfo(): */
@@ -457,8 +471,7 @@ int main ( int argc, char **argv )
     {
         syslog(LOG_ERR, "Bind failed");
         syslog(LOG_ERR, "bind failed: %s", strerror(errno));
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
 
     /* Run as a daemon if specified */
@@ -467,16 +480,14 @@ int main ( int argc, char **argv )
         bool daemon_status = create_daemon();
         if (!daemon_status)
         {
-            cleanup();
-            exit(1);
+            goto exit_on_fail;
         }
     }
 
     if (listen(sockfd, BACKLOG) == -1)
     {
         syslog(LOG_ERR, "Listen failed");
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
 
     /* Setup signal handlers*/
@@ -499,8 +510,7 @@ int main ( int argc, char **argv )
     if(pthread_mutex_init(&tmp_file_write_mutex, NULL) != 0)
     {
         syslog(LOG_ERR, "Creating file write mutex failed");
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
 
     #if (USE_AESD_CHAR_DEVICE == 0)
@@ -509,8 +519,7 @@ int main ( int argc, char **argv )
     if(time_params == NULL)
     {
         syslog(LOG_ERR, "Malloc for time thread structure failed");
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
 
     time_params->tmp_file_write_mutex = &tmp_file_write_mutex;
@@ -518,8 +527,7 @@ int main ( int argc, char **argv )
     if ((pthread_create(&(time_params->thread_id), NULL, &threadfn_timestamp, (void*)time_params)) != 0)
     {
         syslog(LOG_ERR, "Timestamp thread creation failed");
-        cleanup();
-        exit(1);
+        goto exit_on_fail;
     }
     #endif
 
@@ -616,6 +624,9 @@ int main ( int argc, char **argv )
         free(iterator);
         iterator = NULL;
     }
+
+exit_on_fail:
     cleanup();
     closelog();
+    exit(1);
 }
