@@ -191,10 +191,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     }
 
     /* Append data to the current entry */
-    for (size_t i = 0; i < copied_size; i++) 
-    {
-        device->entry.buffptr[device->entry.size + i] = tmp_buffer[i];
-    }
+    memcpy((void *)(device->entry.buffptr + device->entry.size), tmp_buffer, copied_size);
     device->entry.size += copied_size;
 
     /* If newline, add to the circular buffer*/
