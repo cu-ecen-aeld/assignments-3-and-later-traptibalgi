@@ -53,7 +53,7 @@
 #define TIMESTAMP_INTERVAL (10)
 
 /* Build switch */
-#define USE_AESD_CHAR_DEVICE (0)
+#define USE_AESD_CHAR_DEVICE (1)
 
 #if (USE_AESD_CHAR_DEVICE == 1)
     #define FILE_NAME "/dev/aesdchar"
