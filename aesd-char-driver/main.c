@@ -182,10 +182,10 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if (is_newline)
     {
         /* Resize the CB */
-        device->entry.buffptr = kmalloc(device->entry.size + copied_size, GFP_KERNEL);
+        device->entry.buffptr = krealloc(device->entry.buffptr, device->entry.size + copied_size, GFP_KERNEL);
         if (device->entry.buffptr == NULL)
         {
-            PDEBUG("aesd_write: kmalloc failed for entry buffer");
+            PDEBUG("aesd_write: krealloc failed for entry buffer");
             retval = -ENOMEM;
             goto write_free_buffer;
         }
