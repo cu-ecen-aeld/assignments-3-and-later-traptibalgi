@@ -52,6 +52,15 @@
 #define BUF_INITIAL_SIZE (1024)
 #define TIMESTAMP_INTERVAL (10)
 
+/* Build switch */
+#define USE_AESD_CHAR_DEVICE (1)
+
+#if (USE_AESD_CHAR_DEVICE == 1)
+    #define FILE_NAME "/dev/aesdchar"
+#elif (USE_AESD_CHAR_DEVICE == 0)
+	#define FILE_NAME "/var/tmp/aesdsocketdata"
+#endif
+
 int sockfd;
 struct addrinfo *res;  // will point to the results
 volatile sig_atomic_t caught_signal = 0;
@@ -69,6 +78,7 @@ typedef struct server_thread_params
     SLIST_ENTRY(server_thread_params) link;
 } server_thread_params_t;
 
+#if (USE_AESD_CHAR_DEVICE == 0)
 /* The structure for the timestamp thread*/
 typedef struct time_thread_params
 {
@@ -76,6 +86,7 @@ typedef struct time_thread_params
     pthread_mutex_t *tmp_file_write_mutex;
     FILE *tmp_file_time_thread;
 } time_thread_params_t;
+#endif
 
 typedef SLIST_HEAD(socket_head,server_thread_params) head_t;
 
@@ -87,12 +98,14 @@ void cleanup()
         close(sockfd);
     }
 
+    #if (USE_AESD_CHAR_DEVICE == 0)
     if (tmp_file != NULL) 
     {
         fclose(tmp_file);
         tmp_file = NULL;
-        remove("/var/tmp/aesdsocketdata");
+        remove(FILE_NAME);
     }
+    #endif
 
     if (res != NULL) 
     {
@@ -169,6 +182,7 @@ static void signal_handler (int signal_number)
     caught_signal = signal_number;
 }
 
+#if (USE_AESD_CHAR_DEVICE == 0)
 void *threadfn_timestamp(void *time_thread_params_struct)
 {
     time_thread_params_t *time_params = (time_thread_params_t*)time_thread_params_struct;
@@ -227,6 +241,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
 
     return NULL;
 }
+#endif
 
 int receive_data(server_thread_params_t *server_params, char **buf, size_t *receive_buf_size)
 {
@@ -447,8 +462,9 @@ int main ( int argc, char **argv )
         exit(1);
     }
 
-    tmp_file = fopen("/var/tmp/aesdsocketdata", "w+");
+    tmp_file = fopen(FILE_NAME, "w+");
 
+    #if (USE_AESD_CHAR_DEVICE == 0)
     time_thread_params_t *time_params = NULL;
     time_params = (time_thread_params_t*)malloc(sizeof(time_thread_params_t));
     if(time_params == NULL)
@@ -467,6 +483,7 @@ int main ( int argc, char **argv )
         cleanup();
         exit(1);
     }
+    #endif
 
     /* Initialize the head */
     head_t head;
@@ -540,10 +557,12 @@ int main ( int argc, char **argv )
     /* Cleanup after caught signal */
     /* Mutex */
     pthread_mutex_destroy(&tmp_file_write_mutex);
+    #if (USE_AESD_CHAR_DEVICE == 0)
     /* Timestamp thread */
     pthread_cancel(time_params->thread_id);
     pthread_join(time_params->thread_id, NULL);
     free(time_params);
+    #endif
     /* Server thread */
     server_thread_params_t *iterator = NULL;
     server_thread_params_t *tmp = NULL;
