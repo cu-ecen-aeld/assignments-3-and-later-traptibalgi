@@ -76,14 +76,12 @@ typedef struct server_thread_params
     SLIST_ENTRY(server_thread_params) link;
 } server_thread_params_t;
 
-#if (USE_AESD_CHAR_DEVICE == 0)
 /* The structure for the timestamp thread*/
 typedef struct time_thread_params
 {
     pthread_t thread_id;
     pthread_mutex_t *tmp_file_write_mutex;
 } time_thread_params_t;
-#endif
 
 typedef SLIST_HEAD(socket_head,server_thread_params) head_t;
 
@@ -94,6 +92,10 @@ void cleanup()
         shutdown(sockfd, SHUT_RDWR);
         close(sockfd);
     }
+
+    #if (USE_AESD_CHAR_DEVICE == 0)
+ 	remove(FILE_NAME);
+ 	#endif
 
     if (res != NULL) 
     {
@@ -213,7 +215,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
             continue;
         }
 
-        FILE *file_write = fopen(FILE_NAME, "w+");
+        FILE *file_write = fopen(FILE_NAME, "a+");
         if (file_write == NULL)
         {
             syslog(LOG_ERR, "Failed to open write file");
@@ -227,21 +229,25 @@ void *threadfn_timestamp(void *time_thread_params_struct)
         write_bytes = fwrite(outstr, sizeof(char), strlen(outstr), file_write);
         fflush(file_write);
         pthread_mutex_unlock(time_params->tmp_file_write_mutex);
-        fclose(file_write);
-
         if (write_bytes < 0)
         {
             syslog(LOG_ERR, "Timestamp write failed");
             continue;
         }
-    }
 
+        if (file_write != NULL) 
+        {
+            fclose(file_write);
+            file_write = NULL;
+        }
+    }
     return NULL;
 }
 #endif
 
 int receive_data(server_thread_params_t *server_params, char **buf, size_t *receive_buf_size)
 {
+    syslog(LOG_DEBUG, "in receive_data");
     int length;
     size_t total_received = 0;
     char *end_packet = NULL;
@@ -278,6 +284,7 @@ int receive_data(server_thread_params_t *server_params, char **buf, size_t *rece
 
 int process_data(server_thread_params_t *server_params, char *buf, size_t receive_buf_size)
 {
+    syslog(LOG_DEBUG, "in process_data");
     char *end_packet = strchr(buf, '\n');
     if (end_packet == NULL)
     {
@@ -288,7 +295,7 @@ int process_data(server_thread_params_t *server_params, char *buf, size_t receiv
     size_t valid_size = end_packet - buf + 1;
     buf[valid_size] = '\0';
 
-    FILE *file_write = fopen(FILE_NAME, "w+");
+    FILE *file_write = fopen(FILE_NAME, "a+");
     if (file_write == NULL)
     {
         syslog(LOG_ERR, "Failed to open write file");
@@ -301,49 +308,67 @@ int process_data(server_thread_params_t *server_params, char *buf, size_t receiv
     fflush(file_write);
     pthread_mutex_unlock(server_params->tmp_file_write_mutex);
 
-    fclose(file_write);
-
     if (written_bytes < valid_size)
     {
         syslog(LOG_ERR, "Write to temp file failed");
+        if (file_write != NULL) 
+        {
+            fclose(file_write);
+            file_write = NULL;
+        }
         return -1;
     }
 
+    if (file_write != NULL) 
+    {
+        fclose(file_write);
+        file_write = NULL;
+    }
     return 0;
 }
 
 int send_response(server_thread_params_t *server_params, char *buf, size_t receive_buf_size)
 {
+    syslog(LOG_DEBUG, "in send_response");
     size_t read_bytes;
 
-    FILE *file_read = fopen(FILE_NAME, "rb");
-    if (file_read == NULL)
+    FILE *file_write = fopen(FILE_NAME, "a+");
+    if (file_write == NULL)
     {
         syslog(LOG_ERR, "Failed to open write file");
         return -1;
     }
 
     pthread_mutex_lock(server_params->tmp_file_write_mutex);
-    fseek(file_read, 0, SEEK_SET);
-    while ((read_bytes = fread(buf, sizeof(char), receive_buf_size - 1, file_read)) > 0)
+    fseek(file_write, 0, SEEK_SET);
+    while ((read_bytes = fread(buf, sizeof(char), receive_buf_size - 1, file_write)) > 0)
     {
         syslog(LOG_INFO, "Read %s from file", buf);
-        fflush(file_read);
+        fflush(file_write);
         if (send(server_params->client_fd, buf, read_bytes, 0) == -1) 
         {
             syslog(LOG_ERR, "Send to client failed");
-            fclose(file_read);
             pthread_mutex_unlock(server_params->tmp_file_write_mutex);
+            if (file_write != NULL) 
+            {
+                fclose(file_write);
+                file_write = NULL;
+            }
             return -1;
         }
     }
-    fclose(file_read);
     pthread_mutex_unlock(server_params->tmp_file_write_mutex);
+    if (file_write != NULL) 
+    {
+        fclose(file_write);
+        file_write = NULL;
+    }
     return 0;
 }
 
 void *threadfn_server(void *server_thread_params_struct)
 {
+    syslog(LOG_DEBUG, "in thread");
     server_thread_params_t *server_params = (server_thread_params_t*)server_thread_params_struct;
     char *buf = NULL;
     int result = 0;
@@ -478,7 +503,6 @@ int main ( int argc, char **argv )
         exit(1);
     }
 
-
     #if (USE_AESD_CHAR_DEVICE == 0)
     time_thread_params_t *time_params = NULL;
     time_params = (time_thread_params_t*)malloc(sizeof(time_thread_params_t));
@@ -503,7 +527,7 @@ int main ( int argc, char **argv )
     head_t head;
     SLIST_INIT(&head); 
 
-    /* Create the timestamp thread*/
+    /* Create the server thread*/
     server_thread_params_t *server_params = NULL;
 
     /* Now accept incoming connections in a loop while signal not caught*/
