@@ -45,6 +45,9 @@
 #include <time.h>
 #include <sys/select.h>
 #include <unistd.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
+#include <linux/stat.h>
+#include <sys/stat.h>
 
 #define ERROR (-1)
 #define BACKLOG (10)
@@ -64,6 +67,7 @@
 int sockfd;
 struct addrinfo *res;  // will point to the results
 volatile sig_atomic_t caught_signal = 0;
+char *aesd_ioctl_seek_cmd = "AESDCHAR_IOCSEEKTO:";
 
 /* The structure for the linked list that will manage server threads*/
 typedef struct server_thread_params
@@ -179,7 +183,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
     time_thread_params_t *time_params = (time_thread_params_t*)time_thread_params_struct;
     if (time_params == NULL)
     {
-        syslog(LOG_ERR, "Time thread struct is NULL");
+        syslog(LOG_ERR, "threadfn_timestamp: Time thread struct is NULL");
         goto threadfn_timestamp_exit;
     }
 
@@ -187,6 +191,7 @@ void *threadfn_timestamp(void *time_thread_params_struct)
     char outstr[300];
     time_t t;
     struct tm *tmp;
+    int file_write_fd = -1;
 
     /* Run until a signal caught */
     while(!caught_signal)
@@ -195,13 +200,13 @@ void *threadfn_timestamp(void *time_thread_params_struct)
         tmp = localtime(&t);
         if (tmp == NULL) 
         {
-            syslog(LOG_ERR, "Localtime");
+            syslog(LOG_ERR, "threadfn_timestamp: Localtime");
             goto threadfn_timestamp_exit;
         }
 
         if (clock_gettime(CLOCK_MONOTONIC, &wall_time) != 0)
         {
-            syslog(LOG_ERR, "Failed clock_gettime");
+            syslog(LOG_ERR, "threadfn_timestamp: Failed clock_gettime");
             continue;
         }
 
@@ -212,36 +217,54 @@ void *threadfn_timestamp(void *time_thread_params_struct)
 
         if (strftime(outstr, sizeof(outstr),"timestamp: %Y/%m/%d %H:%M:%S\n", tmp) == 0) 
         {
-            syslog(LOG_ERR, "strftime failed");
+            syslog(LOG_ERR, "threadfn_timestamp: strftime failed");
             continue;
         }
 
-        FILE *file_write = fopen(FILE_NAME, "a+");
-        if (file_write == NULL)
+        file_write_fd = open(FILE_NAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+        if (file_write_fd == ERROR)
         {
-            syslog(LOG_ERR, "Failed to open write file");
+            syslog(LOG_ERR, "threadfn_timestamp: Failed to open write file %s", strerror(errno));
             goto threadfn_timestamp_exit;
         }
 
         /* Lock mutex before writing to tmp file and set file position*/
-        int write_bytes = 0;
-        pthread_mutex_lock(time_params->tmp_file_write_mutex);
-        fseek(file_write, 0, SEEK_END);
-        write_bytes = fwrite(outstr, sizeof(char), strlen(outstr), file_write);
-        fflush(file_write);
-        pthread_mutex_unlock(time_params->tmp_file_write_mutex);
-        if (write_bytes < 0)
+        if (pthread_mutex_lock(time_params->tmp_file_write_mutex) != 0)
         {
-            syslog(LOG_ERR, "Timestamp write failed");
-            continue;
+            syslog(LOG_ERR, "threadfn_timestamp: Failed to lock mutex");
+            goto threadfn_timestamp_close_file;
         }
 
-        if (file_write != NULL) 
+        if (lseek(file_write_fd, 0, SEEK_END) == -1)
         {
-            fclose(file_write);
-            file_write = NULL;
+            syslog(LOG_ERR, "threadfn_timestamp: Failed to seek to end of file: %s", strerror(errno));
+            pthread_mutex_unlock(time_params->tmp_file_write_mutex);
+            goto threadfn_timestamp_close_file;
+        }
+        size_t write_bytes = write(file_write_fd, outstr, strlen(outstr));
+        
+        pthread_mutex_unlock(time_params->tmp_file_write_mutex);
+
+        if (write_bytes < 0)
+        {
+            syslog(LOG_ERR, "threadfn_timestamp: Timestamp write failed");
+            goto threadfn_timestamp_close_file;
+        }
+
+        if (file_write_fd != -1)
+        {
+            close(file_write_fd);
+            file_write_fd = -1;
         }
     }
+
+threadfn_timestamp_close_file:
+    if (file_write_fd != -1)
+    {
+        close(file_write_fd);
+        file_write_fd = -1;
+    }
+
 threadfn_timestamp_exit:
     return NULL;
 }
@@ -262,7 +285,7 @@ int receive_data(server_thread_params_t *server_params, char **buf, size_t *rece
             char *new_buf = realloc(*buf, *receive_buf_size);
             if (new_buf == NULL)
             {
-                syslog(LOG_ERR, "Realloc failed for receiving buffer");
+                syslog(LOG_ERR, "receive_data: Realloc failed for receiving buffer");
                 return -1;
             }
             memset(new_buf + total_received, 0, *receive_buf_size - total_received);
@@ -272,7 +295,7 @@ int receive_data(server_thread_params_t *server_params, char **buf, size_t *rece
         length = recv(server_params->client_fd, *buf + total_received, *receive_buf_size - total_received - 1, 0);
         if (length == -1)
         {
-            syslog(LOG_ERR, "Receive failed");
+            syslog(LOG_ERR, "receive_data: Receive failed");
             return -1;
         }
 
@@ -286,93 +309,139 @@ int receive_data(server_thread_params_t *server_params, char **buf, size_t *rece
 
 int process_data(server_thread_params_t *server_params, char *buf, size_t receive_buf_size)
 {
+    int retval = 0;
     syslog(LOG_DEBUG, "in process_data");
     char *end_packet = strchr(buf, '\n');
     if (end_packet == NULL)
     {
-        syslog(LOG_ERR, "Received without newline");
-        goto process_data_exit_on_fail;
+        syslog(LOG_ERR, "process_data: Received without newline");
+        retval = ERROR;
+        goto process_data_exit;
     }
 
     size_t valid_size = end_packet - buf + 1;
     buf[valid_size] = '\0';
 
-    FILE *file_write = fopen(FILE_NAME, "a+");
-    if (file_write == NULL)
+    int file_write_fd = -1;
+    file_write_fd = open(FILE_NAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+    if (file_write_fd == ERROR)
     {
-        syslog(LOG_ERR, "Failed to open write file");
-        goto process_data_exit_on_fail;
+        syslog(LOG_ERR, "process_data: Failed to open write file %s", strerror(errno));
+        retval = ERROR;
+        goto process_data_exit;
     }
 
-    pthread_mutex_lock(server_params->tmp_file_write_mutex);
-    fseek(file_write, 0, SEEK_END);
-    size_t written_bytes = fwrite(buf, sizeof(char), valid_size, file_write);
-    fflush(file_write);
+#if (USE_AESD_CHAR_DEVICE == 1)
+    if (strncmp(buf, aesd_ioctl_seek_cmd, strlen(aesd_ioctl_seek_cmd)) == 0)
+    {
+        struct aesd_seekto seekto;
+        if (sscanf(buf, "AESDCHAR_IOCSEEKTO:%d,%d", &seekto.write_cmd, &seekto.write_cmd_offset) != 2)
+        {
+            syslog(LOG_ERR, "process_data: number of args != 2");
+            retval = ERROR;
+            goto process_data_close_file;
+        }
+        else
+        {
+            if(ioctl(file_write_fd, AESDCHAR_IOCSEEKTO, &seekto) != 0)
+            {
+                syslog(LOG_ERR, "process_data: ioctl failed");
+                retval = ERROR;
+                goto process_data_close_file;
+            }
+        }
+        retval = 0; /* Duplicate but precautionary*/
+        goto process_data_close_file;
+    }
+#endif
+
+    if (pthread_mutex_lock(server_params->tmp_file_write_mutex) != 0)
+    {
+        syslog(LOG_ERR, "process_data: Failed to lock mutex");
+        goto process_data_close_file;
+    }
+    if (lseek(file_write_fd, 0, SEEK_END) == -1)
+    {
+        syslog(LOG_ERR, "process_data: Failed to seek to end of file: %s", strerror(errno));
+        pthread_mutex_unlock(server_params->tmp_file_write_mutex);
+        retval = ERROR;
+        goto process_data_close_file;
+    }
+    size_t written_bytes = write(file_write_fd, buf, valid_size);
     pthread_mutex_unlock(server_params->tmp_file_write_mutex);
 
     if (written_bytes < valid_size)
     {
-        syslog(LOG_ERR, "Write to temp file failed");
-        if (file_write != NULL) 
-        {
-            fclose(file_write);
-            file_write = NULL;
-        }
-        goto process_data_exit_on_fail;
+        syslog(LOG_ERR, "process_data: Write to temp file failed");
+        retval = ERROR;
+        goto process_data_close_file;
     }
 
-    if (file_write != NULL) 
+process_data_close_file:
+    if (file_write_fd != -1)
     {
-        fclose(file_write);
-        file_write = NULL;
+        close(file_write_fd);
+        file_write_fd = -1;
     }
 
-    return 0;
-
-process_data_exit_on_fail:
-    return -1;
+process_data_exit:
+    return retval;
 }
 
 int send_response(server_thread_params_t *server_params, char *buf, size_t receive_buf_size)
 {
     syslog(LOG_DEBUG, "in send_response");
     size_t read_bytes;
+    int retval = 0;
 
-    FILE *file_write = fopen(FILE_NAME, "a+");
-    if (file_write == NULL)
+    int file_read_fd = -1;
+    file_read_fd = open(FILE_NAME, O_CREAT | O_RDONLY, S_IRUSR | S_IRGRP | S_IROTH);
+    if (file_read_fd == ERROR)
     {
-        syslog(LOG_ERR, "Failed to open write file");
-        goto send_response_exit_on_fail;
+        syslog(LOG_ERR, "send_response: Failed to open read file %s", strerror(errno));
+        retval = ERROR;
+        goto send_response_exit;
     }
 
-    pthread_mutex_lock(server_params->tmp_file_write_mutex);
-    fseek(file_write, 0, SEEK_SET);
-    while ((read_bytes = fread(buf, sizeof(char), receive_buf_size - 1, file_write)) > 0)
+    if (pthread_mutex_lock(server_params->tmp_file_write_mutex) != 0)
+    {
+        syslog(LOG_ERR, "send_response: Failed to lock mutex");
+        goto send_response_close_file;
+    }
+
+    if (lseek(file_read_fd, 0, SEEK_SET) == -1)
+    {
+        syslog(LOG_ERR, "send_response: Failed to seek to start of file: %s", strerror(errno));
+        pthread_mutex_unlock(server_params->tmp_file_write_mutex);
+        retval = ERROR;
+        goto send_response_close_file;
+    }
+
+    while ((read_bytes = read(file_read_fd, buf, receive_buf_size - 1)) > 0)
     {
         syslog(LOG_INFO, "Read %s from file", buf);
-        fflush(file_write);
+
         if (send(server_params->client_fd, buf, read_bytes, 0) == -1) 
         {
-            syslog(LOG_ERR, "Send to client failed");
+            syslog(LOG_ERR, "send_response: Send to client failed");
             pthread_mutex_unlock(server_params->tmp_file_write_mutex);
-            if (file_write != NULL) 
-            {
-                fclose(file_write);
-                file_write = NULL;
-            }
-            goto send_response_exit_on_fail;
+            retval = ERROR;
+            goto send_response_close_file;
         }
     }
+    
     pthread_mutex_unlock(server_params->tmp_file_write_mutex);
-    if (file_write != NULL) 
-    {
-        fclose(file_write);
-        file_write = NULL;
-    }
-    return 0;
+    retval = 0;
 
-send_response_exit_on_fail:
-    return -1;
+send_response_close_file:
+    if (file_read_fd != -1)
+    {
+        close(file_read_fd);
+        file_read_fd = -1;
+    }
+
+send_response_exit:
+    return retval;
 }
 
 void *threadfn_server(void *server_thread_params_struct)
