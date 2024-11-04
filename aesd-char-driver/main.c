@@ -19,6 +19,8 @@
 #include <linux/fs.h> // file_operations
 #include <linux/string.h>
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -222,12 +224,177 @@ write_exit:
     return retval;
 }
 
-struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
+loff_t aesd_seek(struct file *filp, loff_t offset, int whence)
+{
+    ssize_t retval = -EINVAL;
+    struct aesd_dev *device = NULL;
+    loff_t newpos = 0;
+    size_t i = 0;
+    size_t buffer_size;
+    struct aesd_buffer_entry *buf = NULL;
+
+    PDEBUG("seek with offset %lld", offset);
+
+    /* Input validity check */
+    if (filp == NULL)
+    {
+        PDEBUG("aesd_seek: Invalid inputs");
+        retval = -EINVAL;
+        goto seek_exit;
+    }
+
+    device = filp->private_data;
+    if (device == NULL)
+    {
+        PDEBUG("aesd_seek: filp->private_data failed");
+        retval = -EPERM;
+        goto seek_exit;
+    }
+
+    /* Lock the buffer_mutex */
+    if (mutex_lock_interruptible(&device->buffer_mutex)) 
+    {
+        PDEBUG("aesd_adjust_file_offset: Could not lock buffer_mutex");
+        retval = -ERESTARTSYS;
+        goto seek_exit;
+    }
+
+    /* Get the total size */
+    AESD_CIRCULAR_BUFFER_FOREACH(buf, &device->buffer, i)
+    {
+       buffer_size += buf->size;
+    }
+
+    newpos = fixed_size_llseek(filp, offset, whence, buffer_size);
+
+    /* Check return value from fixed_size_llseek*/
+    if (newpos < 0)
+    {
+    	retval = -EINVAL;
+    }
+    else
+    {
+    	filp->f_pos = newpos;
+    	retval = newpos;
+    }
+
+seek_unlock:
+    mutex_unlock(&device->buffer_mutex);
+
+seek_exit:
+    return retval;
+}
+
+static long aesd_adjust_file_offset (struct file *filp, unsigned int write_cmd, unsigned int write_cmd_offset)
+{
+    /*  ● Check for valid write_cmd and write_cmd_offset values
+        ● Calculate the start offset to write_cmd
+        ● Add write_cmd_offset
+        ● Save as filp->f_pos*/
+    long retval = 0;
+    struct aesd_dev *device = NULL;
+    size_t i;
+    size_t file_offset;
+
+    /* Input validity check. Checking for filp validity & if write_cmd is > CB's max entries supported*/
+    if ((filp == NULL) || (write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED))
+    {
+        PDEBUG("aesd_adjust_file_offset: Invalid inputs. Filp invalid or write_cmd >= 10");
+        retval = -EINVAL;
+        goto aesd_adjust_file_offset_exit;
+    }
+
+    device = filp->private_data;
+    if (device == NULL)
+    {
+        PDEBUG("aesd_adjust_file_offset: filp->private_data failed");
+        retval = -EPERM;
+        goto aesd_adjust_file_offset_exit;
+    }
+
+    /* Lock the buffer_mutex */
+    if (mutex_lock_interruptible(&device->buffer_mutex)) 
+    {
+        PDEBUG("aesd_adjust_file_offset: Could not lock buffer_mutex");
+        retval = -ERESTARTSYS;
+        goto aesd_adjust_file_offset_unlock;
+    }
+
+    /* Another validity check for write_cmd if requested entry exists */
+    if (device->buffer.entry[write_cmd].buffptr == NULL)
+    {
+        PDEBUG("aesd_adjust_file_offset: Requested entry does not exist");
+        retval = -EINVAL;
+        goto aesd_adjust_file_offset_unlock;
+    }
+    /* If exists, check if the requested offset can be accomodated in the size */
+    else if (write_cmd_offset >= device->buffer.entry[write_cmd].size)
+    {
+        PDEBUG("aesd_adjust_file_offset: Requested entry exists but smaller than write_cmd_offset");
+        retval = -EINVAL;
+        goto aesd_adjust_file_offset_unlock;
+    }
+
+    /* Update the file pointer */
+    for (i = 0; i < write_cmd; i++)
+    {
+        file_offset += device->buffer.entry[i].size;
+    }
+
+    filp->f_pos = file_offset + write_cmd_offset;
+
+aesd_adjust_file_offset_unlock:
+    mutex_unlock(&device->buffer_mutex);
+
+aesd_adjust_file_offset_exit: 
+    return retval;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	int retval = 0;
+    
+	/*
+	 * extract the type and number bitfields, and don't decode
+	 * wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
+	 */
+	if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) 
+        return -ENOTTY;
+	if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) 
+        return -ENOTTY;
+
+	switch (cmd) 
+    {
+        case AESDCHAR_IOCSEEKTO:
+        {
+            struct aesd_seekto seekto;
+            if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0)
+            {
+                retval = EFAULT;
+            }
+            else
+            {
+                retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+            }
+            break;
+        }
+
+        default:  /* redundant, as cmd was checked against MAXNR */
+            retval = -ENOTTY;
+	}
+
+	return retval;
+}
+
+struct file_operations aesd_fops = 
+{
+    .owner =           THIS_MODULE,
+    .read =            aesd_read,
+    .write =           aesd_write,
+    .open =            aesd_open,
+    .release =         aesd_release,
+    .llseek =          aesd_seek,
+    .unlocked_ioctl =  aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
