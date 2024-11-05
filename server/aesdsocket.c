@@ -278,6 +278,7 @@ int receive_and_process_data(server_thread_params_t *server_params, char *buf, s
     char *end_packet = NULL;
     int retval = 0;
     
+    /* Changed implementation from file pointer to file descriptor for ease */
     int file_fd = -1;
     file_fd = open(FILE_NAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     if (file_fd == ERROR)
@@ -362,18 +363,6 @@ int receive_and_process_data(server_thread_params_t *server_params, char *buf, s
 
     syslog(LOG_DEBUG, "in send_response");
     size_t read_bytes;
-
-#if (USE_AESD_CHAR_DEVICE == 0)
-    close(file_fd);
-    file_fd = -1;
-    file_fd = open(FILE_NAME, O_CREAT | O_RDONLY, S_IRUSR | S_IRGRP | S_IROTH);
-    if (file_fd == ERROR)
-    {
-        syslog(LOG_ERR, "send_response: Failed to open read file %s", strerror(errno));
-        retval = ERROR;
-        goto update_exit;
-    }
-#endif
 
 update_read:
     if (pthread_mutex_lock(server_params->tmp_file_write_mutex) != 0)
